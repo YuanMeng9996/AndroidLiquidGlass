@@ -4,7 +4,7 @@ kotlin = "2.3.10"
 
 activity = "1.12.4"
 core = "1.17.0"
-compose = "1.12.4"
+compose = "1.10.3"
 kyantShapes = "1.2.0"
 
 [libraries]
