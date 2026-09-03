@@ -11,8 +11,8 @@ plugins {
 kotlin {
     android {
         minSdk = 21
-        compileSdk = 37
-        buildToolsVersion = "37.0.0"
+        compileSdk = 36
+        buildToolsVersion = "36.1.0"
         namespace = "com.kyant.backdrop"
         compilerOptions {
             jvmTarget = JvmTarget.JVM_11
