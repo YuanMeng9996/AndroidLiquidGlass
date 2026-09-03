@@ -1,25 +1,32 @@
 [versions]
-agp = "9.3.2"
-kotlin = "2.4.10"
-
-activity = "1.13.0"
-core = "1.19.0"
-compose = "1.12.0"
-kyantShapes = "1.2.1"
+agp = "9.0.0"
+kotlin = "2.3.10"
+# 官方 *构建* 必备依赖, 无需过多注释 #
+coreKtx = "1.17.0"
+activityCompose = "1.12.4"
+compose = "1.10.3"
+# 官方 *AndroidX 及 Compose* 必备依赖, 无需过多注释 #
+kyantShapes = "1.2.0"
+# 第三方 *胶囊形状* 依赖, 主要用于契合安卓液态玻璃 #
 
 [libraries]
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core" }
-androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "compose" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics", version.ref = "compose" }
 compose-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
-compose-foundation = { group = "org.jetbrains.compose.foundation", name = "foundation", version.ref = "compose" }
-compose-ui = { group = "org.jetbrains.compose.ui", name = "ui", version.ref = "compose" }
-compose-ui-graphics = { group = "org.jetbrains.compose.ui", name = "ui-graphics", version.ref = "compose" }
-compose-material-ripple = { group = "org.jetbrains.compose.material", name = "material-ripple", version.ref = "compose" }
+androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "compose" }
+androidx-compose-material-ripple = { group = "androidx.compose.material", name = "material-ripple", version.ref = "compose" }
+# 官方 *AndroidX 及 Compose* 必备库, 无需过多注释 #
 kyant-shapes = { group = "io.github.kyant0", name = "shapes", version.ref = "kyantShapes" }
+# 第三方 *胶囊形状* 库, 主要用于契合安卓液态玻璃 #
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+# 官方必备插件, 无需过多注释 #
+
 android-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
-kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "compose" }
