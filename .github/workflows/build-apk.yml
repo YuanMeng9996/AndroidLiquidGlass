@@ -1,0 +1,332 @@
+# =============================================================================
+# 文件名：build-apk.yml
+# 作用：为 Kyant0/AndroidLiquidGlass（android 分支）构建 catalog 模块 APK
+# 目标模块：:catalog（applicationId = com.kyant.backdrop.catalog）
+# 触发：push / pull_request / 手动 workflow_dispatch
+# 产物：Debug APK + Release APK（上传为 GitHub Actions Artifact）
+# =============================================================================
+
+# name：在 GitHub Actions 页面显示的工作流名称
+name: Build APK
+
+# on：定义何时触发本工作流
+on:
+  # push：代码推送到指定分支时触发
+  push:
+    # branches：监听的分支列表（android 为原生 Android 分支，kmp 为跨平台分支）
+    branches:
+      - android          # 原生 Android 液态玻璃主分支（含 :catalog）
+      - kmp              # KMP 分支（含 :androidApp，下方会按分支选择模块）
+      - main             # 若后续将默认分支改名为 main 也兼容
+      - master           # 兼容旧默认分支名
+
+  # pull_request：向指定分支提 PR 时触发，用于验证构建是否通过
+  pull_request:
+    # branches：PR 目标分支
+    branches:
+      - android
+      - kmp
+      - main
+      - master
+
+  # workflow_dispatch：允许在 GitHub 网页上「手动运行」本工作流
+  workflow_dispatch:
+    # inputs：手动运行时可填写的参数
+    inputs:
+      # build_type：选择要构建的 APK 类型
+      build_type:
+        # description：参数说明（显示在手动运行界面）
+        description: "要构建的 APK 类型"
+        # required：是否必填
+        required: true
+        # default：默认值
+        default: "both"
+        # type：输入类型为下拉选择
+        type: choice
+        # options：可选值列表
+        options:
+          - both            # 同时构建 Debug 与 Release
+          - debug           # 只构建 Debug
+          - release         # 只构建 Release
+
+# concurrency：同一分支/PR 只保留最新一次构建，取消旧的进行中任务，节省配额
+concurrency:
+  # group：按工作流名 + 分支/PR 号分组
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # cancel-in-progress：有新运行时取消同组旧运行
+  cancel-in-progress: true
+
+# jobs：定义具体要执行的任务
+jobs:
+  # build：构建 APK 的主任务
+  build:
+    # name：任务在 UI 中显示的名称
+    name: Build Catalog / AndroidApp APK
+    # runs-on：使用 GitHub 托管的 Ubuntu 最新 runner
+    runs-on: ubuntu-latest
+
+    # permissions：最小权限原则，只给读代码 + 写产物所需权限
+    permissions:
+      # contents: read —— 检出仓库代码
+      contents: read
+      # actions: write —— 上传 Artifact（部分场景需要）
+      actions: write
+
+    # steps：按顺序执行的步骤
+    steps:
+      # -------------------------------------------------------------------------
+      # 步骤 1：检出仓库源码
+      # 使用官方 actions/checkout，拉取触发本次工作流的那次提交
+      # -------------------------------------------------------------------------
+      - name: Checkout repository
+        # uses：使用的 Action 及其版本（固定 major 版本，避免意外破坏）
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------------
+      # 步骤 2：根据当前分支决定要构建的 Gradle 应用模块
+      # android 分支 → :catalog
+      # kmp 分支     → :androidApp
+      # 其它分支默认按 :catalog 处理（可按需改）
+      # -------------------------------------------------------------------------
+      - name: Resolve app module by branch
+        # id：后续步骤通过 steps.resolve.outputs 读取结果
+        id: resolve
+        # run：在 bash 中根据 GITHUB_REF_NAME 选择模块名
+        run: |
+          # 打印当前分支名，便于排查
+          echo "Current branch: ${GITHUB_REF_NAME}"
+
+          # 默认模块名设为 catalog（对应 android 分支）
+          MODULE="catalog"
+          # Gradle 任务前缀，例如 :catalog
+          GRADLE_MODULE=":catalog"
+
+          # 若当前是 kmp 分支，则改为 androidApp 模块
+          if [ "${GITHUB_REF_NAME}" = "kmp" ]; then
+            MODULE="androidApp"
+            GRADLE_MODULE=":androidApp"
+          fi
+
+          # 将 MODULE 写入 GitHub 输出，供后续步骤使用
+          echo "module=${MODULE}" >> "${GITHUB_OUTPUT}"
+          # 将 GRADLE_MODULE 写入 GitHub 输出
+          echo "gradle_module=${GRADLE_MODULE}" >> "${GITHUB_OUTPUT}"
+
+          # 打印解析结果，方便在日志中确认
+          echo "Resolved module directory: ${MODULE}"
+          echo "Resolved Gradle module: ${GRADLE_MODULE}"
+
+      # -------------------------------------------------------------------------
+      # 步骤 3：安装 JDK 21
+      # catalog/build.gradle.kts 中 kotlin { jvmToolchain(21) }，必须用 21
+      # -------------------------------------------------------------------------
+      - name: Set up JDK 21
+        # uses：官方 setup-java Action
+        uses: actions/setup-java@v4
+        # with：传入参数
+        with:
+          # distribution：使用 Temurin（Eclipse Adoptium）发行版，稳定常用
+          distribution: "temurin"
+          # java-version：JDK 主版本号 21，与项目 jvmToolchain 一致
+          java-version: "21"
+          # cache：让 setup-java 配合 Gradle 做依赖缓存（与后续 cache 可叠加）
+          cache: "gradle"
+
+      # -------------------------------------------------------------------------
+      # 步骤 4：安装 Android SDK 命令行工具
+      # 需要 platform / build-tools，与 catalog 的 compileSdk、buildTools 对齐
+      # android 分支：compileSdk 36、buildTools 36.1.0
+      # -------------------------------------------------------------------------
+      - name: Set up Android SDK
+        # uses：android-actions 社区维护的 setup-android
+        uses: android-actions/setup-android@v3
+
+      # -------------------------------------------------------------------------
+      # 步骤 5：接受 Android SDK 许可并安装所需组件
+      # 避免 sdkmanager 在 CI 中因未接受 license 而失败
+      # -------------------------------------------------------------------------
+      - name: Install Android SDK packages
+        # run：调用 sdkmanager 安装 platform 与 build-tools
+        run: |
+          # 接受所有 SDK 许可（yes 管道给 sdkmanager --licenses）
+          yes | sdkmanager --licenses >/dev/null || true
+
+          # 安装 Android 36 平台（与 catalog compileSdk 对齐）
+          sdkmanager "platforms;android-36"
+
+          # 安装 build-tools 36.1.0（与 catalog buildToolsVersion 对齐）
+          sdkmanager "build-tools;36.1.0"
+
+          # 安装 platform-tools（adb 等，部分任务可能间接需要）
+          sdkmanager "platform-tools"
+
+          # 打印已安装包，便于调试
+          sdkmanager --list_installed
+
+      # -------------------------------------------------------------------------
+      # 步骤 6：为 gradlew 添加可执行权限
+      # Linux runner 上从 Windows 检出时可能丢失 +x
+      # -------------------------------------------------------------------------
+      - name: Make gradlew executable
+        # run：chmod +x 赋予执行权限
+        run: chmod +x ./gradlew
+
+      # -------------------------------------------------------------------------
+      # 步骤 7：解析「构建类型」输入
+      # push/PR 默认 both；手动运行则用 workflow_dispatch 的 inputs
+      # -------------------------------------------------------------------------
+      - name: Resolve build type
+        # id：供后续 if 条件使用
+        id: build_type
+        # run：根据事件类型决定 BUILD_TYPE
+        run: |
+          # 若是手动触发且传入了 build_type，则使用该值
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BUILD_TYPE="${{ inputs.build_type }}"
+          else
+            # push / pull_request 默认同时打 Debug + Release
+            BUILD_TYPE="both"
+          fi
+
+          # 输出 build_type
+          echo "value=${BUILD_TYPE}" >> "${GITHUB_OUTPUT}"
+          # 日志确认
+          echo "Build type: ${BUILD_TYPE}"
+
+      # -------------------------------------------------------------------------
+      # 步骤 8：构建 Debug APK
+      # 任务：:catalog:assembleDebug 或 :androidApp:assembleDebug
+      # Debug 使用默认 debug 签名，可直接安装
+      # -------------------------------------------------------------------------
+      - name: Build Debug APK
+        # if：both 或 debug 时才执行
+        if: steps.build_type.outputs.value == 'both' || steps.build_type.outputs.value == 'debug'
+        # run：调用 Gradle Wrapper 组装 Debug 变体
+        run: |
+          # 使用 --stacktrace 便于失败时看完整栈
+          # 使用 --no-daemon 减少 CI 上守护进程残留问题
+          ./gradlew \
+            ${{ steps.resolve.outputs.gradle_module }}:assembleDebug \
+            --stacktrace \
+            --no-daemon \
+            --build-cache
+
+      # -------------------------------------------------------------------------
+      # 步骤 9：构建 Release APK
+      # 注意：catalog 未配置 signingConfigs 时，AGP 仍可产出 release APK
+      #       （通常为未签名或需后续 jarsigner/apksigner；debug 签名更适合演示）
+      # 若你有正式密钥，可用下方「可选签名」步骤替换/增强
+      # -------------------------------------------------------------------------
+      - name: Build Release APK
+        # if：both 或 release 时才执行
+        if: steps.build_type.outputs.value == 'both' || steps.build_type.outputs.value == 'release'
+        # run：组装 Release 变体（会启用 minify + shrinkResources）
+        run: |
+          # assembleRelease：生成 release APK
+          ./gradlew \
+            ${{ steps.resolve.outputs.gradle_module }}:assembleRelease \
+            --stacktrace \
+            --no-daemon \
+            --build-cache
+
+      # -------------------------------------------------------------------------
+      # 步骤 10：整理 APK 到统一目录，方便上传与下载
+      # 标准输出路径：
+      #   <module>/build/outputs/apk/debug/*.apk
+      #   <module>/build/outputs/apk/release/*.apk
+      # -------------------------------------------------------------------------
+      - name: Collect APK artifacts
+        # id：记录是否找到 APK
+        id: collect
+        # run：复制 APK 到 artifacts/ 目录并重命名，带上短 SHA
+        run: |
+          # 创建产物目录
+          mkdir -p artifacts
+
+          # 读取前面解析出的模块目录名
+          MODULE="${{ steps.resolve.outputs.module }}"
+          # 取 commit 短 SHA，用于文件名，避免覆盖
+          SHORT_SHA="${GITHUB_SHA::7}"
+          # 分支名中的 / 替换为 -，避免路径问题
+          BRANCH_SAFE="${GITHUB_REF_NAME//\//-}"
+
+          # 标记是否至少收集到一个 APK
+          FOUND=false
+
+          # Debug APK 源路径（通配，兼容最终文件名差异）
+          DEBUG_SRC="${MODULE}/build/outputs/apk/debug/*.apk"
+          # Release APK 源路径
+          RELEASE_SRC="${MODULE}/build/outputs/apk/release/*.apk"
+
+          # 若存在 Debug APK，则复制并重命名
+          if ls ${DEBUG_SRC} 1>/dev/null 2>&1; then
+            # 复制第一个匹配的 debug apk（通常只有一个）
+            cp ${DEBUG_SRC} "artifacts/${MODULE}-${BRANCH_SAFE}-${SHORT_SHA}-debug.apk"
+            echo "Collected Debug APK"
+            FOUND=true
+          else
+            echo "No Debug APK found (may be skipped by build_type)"
+          fi
+
+          # 若存在 Release APK，则复制并重命名
+          if ls ${RELEASE_SRC} 1>/dev/null 2>&1; then
+            cp ${RELEASE_SRC} "artifacts/${MODULE}-${BRANCH_SAFE}-${SHORT_SHA}-release.apk"
+            echo "Collected Release APK"
+            FOUND=true
+          else
+            echo "No Release APK found (may be skipped by build_type)"
+          fi
+
+          # 列出 artifacts 目录内容，写入日志
+          echo "Artifacts directory contents:"
+          ls -lah artifacts || true
+
+          # 输出是否找到产物
+          echo "found=${FOUND}" >> "${GITHUB_OUTPUT}"
+
+          # 若完全没有 APK，则以失败退出，避免「绿勾但没包」
+          if [ "${FOUND}" != "true" ]; then
+            echo "ERROR: No APK artifacts were collected."
+            exit 1
+          fi
+
+      # -------------------------------------------------------------------------
+      # 步骤 11：上传 APK 到 GitHub Actions Artifacts
+      # 可在本次 run 页面下载，默认保留 30 天（可改 retention-days）
+      # -------------------------------------------------------------------------
+      - name: Upload APK artifacts
+        # uses：官方 upload-artifact
+        uses: actions/upload-artifact@v4
+        # with：上传配置
+        with:
+          # name：Artifact 显示名称（含模块、分支、短 SHA）
+          name: ${{ steps.resolve.outputs.module }}-apk-${{ github.ref_name }}-${{ github.sha }}
+          # path：要上传的目录（内含 debug/release apk）
+          path: artifacts/*.apk
+          # if-no-files-found：没有文件时失败（与上一步双保险）
+          if-no-files-found: error
+          # retention-days：产物保留天数
+          retention-days: 30
+
+      # -------------------------------------------------------------------------
+      # 步骤 12（可选）：在 Summary 中写Markdown 摘要，方便在 run 页直接看
+      # -------------------------------------------------------------------------
+      - name: Write job summary
+        # if：始终尝试写摘要（即使前面部分跳过）
+        if: always()
+        # run：把构建信息追加到 GITHUB_STEP_SUMMARY
+        run: |
+          {
+            echo "## APK Build Summary"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 分支 | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| 模块 | \`${{ steps.resolve.outputs.gradle_module }}\` |"
+            echo "| 构建类型 | \`${{ steps.build_type.outputs.value }}\` |"
+            echo "| Runner | \`ubuntu-latest\` + JDK 21 |"
+            echo ""
+            echo "### 下载"
+            echo "请到本 run 页面的 **Artifacts** 区域下载 APK。"
+          } >> "${GITHUB_STEP_SUMMARY}"
